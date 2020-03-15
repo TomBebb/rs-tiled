@@ -9,6 +9,7 @@ use std::str::FromStr;
 use xml::attribute::OwnedAttribute;
 use xml::reader::XmlEvent;
 use xml::reader::{Error as XmlError, EventReader};
+use ggez::Context;
 
 #[derive(Debug, Copy, Clone)]
 pub enum ParseTileError {
@@ -240,6 +241,7 @@ pub struct Map {
 
 impl Map {
     fn new<R: Read>(
+        ctx: &mut Context,
         parser: &mut EventReader<R>,
         attrs: Vec<OwnedAttribute>,
         map_path: Option<&Path>,
@@ -268,7 +270,7 @@ impl Map {
         let mut layer_index = 0;
         parse_tag!(parser, "map", {
             "tileset" => | attrs| {
-                tilesets.push(Tileset::new(parser, attrs, map_path)?);
+                tilesets.push(Tileset::new(ctx, parser, attrs, map_path)?);
                 Ok(())
             },
             "layer" => |attrs| {
@@ -361,11 +363,12 @@ pub struct Tileset {
 
 impl Tileset {
     fn new<R: Read>(
+        ctx: &mut ggez::Context,
         parser: &mut EventReader<R>,
         attrs: Vec<OwnedAttribute>,
         map_path: Option<&Path>,
     ) -> Result<Tileset, TiledError> {
-        Tileset::new_internal(parser, &attrs).or_else(|_| Tileset::new_reference(&attrs, map_path))
+        Tileset::new_internal(parser, &attrs).or_else(|_| Tileset::new_reference(ctx, &attrs, map_path))
     }
 
     fn new_internal<R: Read>(
@@ -413,6 +416,7 @@ impl Tileset {
     }
 
     fn new_reference(
+        ctx: &mut ggez::Context,
         attrs: &Vec<OwnedAttribute>,
         map_path: Option<&Path>,
     ) -> Result<Tileset, TiledError> {
@@ -427,7 +431,7 @@ impl Tileset {
         );
 
         let tileset_path = map_path.ok_or(TiledError::Other("Maps with external tilesets must know their file location.  See parse_with_path(Path).".to_string()))?.with_file_name(source);
-        let file = File::open(&tileset_path).map_err(|_| {
+        let file = ggez::filesystem::open(ctx, &tileset_path).map_err(|_| {
             TiledError::Other(format!(
                 "External tileset file not found: {:?}",
                 tileset_path
@@ -1116,7 +1120,7 @@ fn convert_to_tile(all: &Vec<u8>, width: u32) -> Vec<Vec<LayerTile>> {
     data
 }
 
-fn parse_impl<R: Read>(reader: R, map_path: Option<&Path>) -> Result<Map, TiledError> {
+fn parse_impl<R: Read>(ctx: &mut Context, reader: R, map_path: Option<&Path>) -> Result<Map, TiledError> {
     let mut parser = EventReader::new(reader);
     loop {
         match parser.next().map_err(TiledError::XmlDecodingError)? {
@@ -1124,7 +1128,7 @@ fn parse_impl<R: Read>(reader: R, map_path: Option<&Path>) -> Result<Map, TiledE
                 name, attributes, ..
             } => {
                 if name.local_name == "map" {
-                    return Map::new(&mut parser, attributes, map_path);
+                    return Map::new(ctx, &mut parser, attributes, map_path);
                 }
             }
             XmlEvent::EndDocument => {
@@ -1141,23 +1145,24 @@ fn parse_impl<R: Read>(reader: R, map_path: Option<&Path>) -> Result<Map, TiledE
 /// parse it. This augments `parse` with a file location: some engines
 /// (e.g. Amethyst) simply hand over a byte stream (and file location) for parsing,
 /// in which case this function may be required.
-pub fn parse_with_path<R: Read>(reader: R, path: &Path) -> Result<Map, TiledError> {
-    parse_impl(reader, Some(path))
+pub fn parse_with_path<R: Read>(ctx: &mut Context, reader: R, path: &Path) -> Result<Map, TiledError> {
+    parse_impl(ctx, reader, Some(path))
 }
 
 /// Parse a file hopefully containing a Tiled map and try to parse it.  If the
 /// file has an external tileset, the tileset file will be loaded using a path
 /// relative to the map file's path.
-pub fn parse_file(path: &Path) -> Result<Map, TiledError> {
-    let file = File::open(path)
+pub fn parse_file(ctx: &mut Context, path: &Path) -> Result<Map, TiledError> {
+    let file = ggez::filesystem::open(ctx, path)
         .map_err(|_| TiledError::Other(format!("Map file not found: {:?}", path)))?;
-    parse_impl(file, Some(path))
+
+    parse_impl(ctx, file, Some(path))
 }
 
 /// Parse a buffer hopefully containing the contents of a Tiled file and try to
 /// parse it.
-pub fn parse<R: Read>(reader: R) -> Result<Map, TiledError> {
-    parse_impl(reader, None)
+pub fn parse<R: Read>(ctx: &mut Context, reader: R) -> Result<Map, TiledError> {
+    parse_impl(ctx, reader, None)
 }
 
 /// Parse a buffer hopefully containing the contents of a Tiled tileset.
